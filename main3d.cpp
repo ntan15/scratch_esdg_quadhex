@@ -211,6 +211,18 @@ int main(int argc, char **argv){
     E;
   setOccaArray(app, Q, app->o_Q); 
 
+  // Scratch space
+  dfloat* scratch_Nq3 = (dfloat*) malloc(sizeof(dfloat)*(mesh->N + 1)*(mesh->N + 1)*(mesh->N + 1));
+  dfloat* scratch_NfpNfaces = (dfloat*) malloc(sizeof(dfloat)*mesh->Nfp * mesh->Nfaces);
+  for(int i=0; i<(mesh->N + 1)*(mesh->N + 1)*(mesh->N + 1); ++i) {
+    scratch_Nq3[i] = 0.0f;
+  }
+  for(int i=0; i<mesh->Nfq * mesh->Nfaces; ++i) {
+    scratch_NfpNfaces[i] = 0.0f;
+  }
+  occa::memory o_scratch_Nq3 = app->device.malloc(sizeof(dfloat)*(mesh->N + 1)*(mesh->N + 1)*(mesh->N + 1), scratch_Nq3);
+  occa::memory o_scratch_NfpNfaces = app->device.malloc(sizeof(dfloat)*mesh->Nfp * mesh->Nfaces, scratch_NfpNfaces);
+
   MatrixXd wJq = mesh->wq.asDiagonal() * (mesh->Vq*mesh->J);
   // for KE computation
   int log2Nq = (int)ceil(log2(Np));
@@ -228,7 +240,7 @@ int main(int argc, char **argv){
   app->update = app->device.buildKernel(path.c_str(),"update",app->props);
   app->eval_surface = app->device.buildKernel(path.c_str(),"eval_surface",app->props);  
   occa::kernel compute_aux = app->device.buildKernel(path.c_str(),"compute_aux",app->props); 
-  
+  occa::kernel volume_test = app->device.buildKernel(path.c_str(), "volume_test", app->props);
 
 #if 0
   app->eval_surface(K, app->o_Vf1D,app->o_Q, app->o_Qf);
@@ -290,10 +302,14 @@ clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);
       const dfloat fa  = (dfloat) mesh->rk4a[INTRK];
       const dfloat fb  = (dfloat) mesh->rk4b[INTRK];
 
+      volume_test(K,app->o_vgeo, app->o_vfgeo,
+		  app->o_D1D, app->o_Vf1D, app->o_Lf1D,
+		  app->o_Q,app->o_Qf,app->o_rhs,app->o_rhsf,o_scratch_Nq3, o_scratch_NfpNfaces);
+/*
       app->volume(K,app->o_vgeo, app->o_vfgeo,
 		  app->o_D1D, app->o_Vf1D, app->o_Lf1D,
 		  app->o_Q,app->o_Qf,app->o_rhs,app->o_rhsf);
-      
+*/      
       app->surface(K,app->o_vgeo,app->o_fgeo,app->o_mapPq,app->o_Lf1D,
 		   app->o_Qf,app->o_rhsf,app->o_rhs);
       

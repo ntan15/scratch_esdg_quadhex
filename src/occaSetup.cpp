@@ -123,6 +123,9 @@ void setupOccaMesh3d(Mesh *mesh, App *app){
   app->props["defines/p_Nq1"] = mesh->N + 1;  // (N+1)
   app->props["defines/p_Nq2"] = (mesh->N + 1)*(mesh->N + 1);  
   app->props["defines/p_Nq3"] = (mesh->N + 1)*(mesh->N + 1)*(mesh->N + 1);  
+
+  // Test
+  app->props["defines/p_Nq3_32"] = ((((mesh->N + 1)*(mesh->N + 1)*(mesh->N + 1)) >> 5) + 1)*32;
     
   app->props["defines/p_Nfaces"] = mesh->Nfaces;
   app->props["defines/p_Nfp"] = mesh->Nfp;
