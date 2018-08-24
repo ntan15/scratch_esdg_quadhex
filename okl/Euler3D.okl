@@ -13,7 +13,7 @@
 #endif
 
 #define PARALLEL_DIM
-#define NUM_THREADS 192
+#define NUM_THREADS 544
 
 // helpful functions
 #define avg(a, b) .5f * (a + b)
@@ -21,6 +21,7 @@
   ((p_gamma - 1.f) * (E - .5f * rho * (u * u + v * v + w * w)))
 #define beta(rho, u, v, w, E)				\
   (rho / (2.f * pfun(rho, u, v, w, E))) // inverse temp
+// Uses less division by assuming input values have not been divided by rho
 #define beta_test(rho, u, v, w, E)                                             \
   ((rho*rho) / (2.f * ((p_gamma - 1.f) * ((rho * E) - .5f *                    \
   (u * u + v * v + w * w)))))
@@ -66,6 +67,7 @@ dfloat logmean_test(dfloat aL, dfloat aR)
   const dfloat u = f * f;
   const dfloat u2 = u * u;
 
+// If statement potentially eliminates LOGDF(xi)
   if (fabs(u) < 1.fe-4)
   {
     dfloat F = 105.f + 35.f * u + 21.f * u2 + 15.f * u2 * u;
@@ -677,9 +679,14 @@ void euler3d_flux_test(dfloat rho_i, dfloat rho_j, dfloat u_i, dfloat u_j,
     @exclusive int ii,jj,kk;
 
 #ifdef PARALLEL_DIM   
+/* ============================================================================
+    Will need to change the number of threads running based on which version
+    of parallel computation is running.
+   ============================================================================
+*/
 //    for (int i = 0; i < 3*p_Nq3+p_NfpNfaces; ++i; @inner(0)){
-    for (int i = 0; i < 3*p_Nq3; ++i; @inner(0)){
-//    for (int i = 0; i < NUM_THREADS; ++i; @inner(0)){
+//    for (int i = 0; i < 3*p_Nq3; ++i; @inner(0)){
+    for (int i = 0; i < NUM_THREADS; ++i; @inner(0)){
 
       // load ops
       if (i < p_Nq1){
@@ -733,6 +740,7 @@ void euler3d_flux_test(dfloat rho_i, dfloat rho_j, dfloat u_i, dfloat u_j,
         }       
       }      
 // Set values to zero for atomics
+// Probably can be optimized better.
       if (i < p_Nq3){
 
         int id = i + e*p_Nq3*p_Nfields;
@@ -778,13 +786,15 @@ void euler3d_flux_test(dfloat rho_i, dfloat rho_j, dfloat u_i, dfloat u_j,
     }
 
 @barrier("localMemFence");
-/*
+/* 
+  ============================================================================
     Computes data in all three dimensions with an variable number of threads.
     Must use at least p_NfpNface+3 threads, remaining threads go to speed up
     differentiation for all 3 dimensions. More threads helpful until each
     element gets its own thread.
+  =============================================================================
 */
-/*
+
     for(int i=0; i<NUM_THREADS; ++i; @inner(0)) {
         const int thread_step = (NUM_THREADS-p_NfpNfaces)/3;
         if(i < thread_step) {
@@ -1175,21 +1185,18 @@ void euler3d_flux_test(dfloat rho_i, dfloat rho_j, dfloat u_i, dfloat u_j,
             rhsf[id] = -val[2]; id += p_NfpNfaces;
             rhsf[id] = -val[3]; id += p_NfpNfaces;
             rhsf[id] = -val[4]; 
-//            atomicAdd(&(rhsf[id]), -val[0]); id += p_NfpNfaces;
-//            atomicAdd(&(rhsf[id]), -val[1]); id += p_NfpNfaces;
-//            atomicAdd(&(rhsf[id]), -val[2]); id += p_NfpNfaces;
-//            atomicAdd(&(rhsf[id]), -val[3]); id += p_NfpNfaces;
-//            atomicAdd(&(rhsf[id]), -val[4]); id += p_NfpNfaces;
         }
     }
-*/
+
 /*
+  =============================================================================
     Reduces computation to roughly log(p_Nq1) across 3 dimensions but uses
     shared memory. Shared memory usage limits order to below 5 or 6.
     Currently working on warp shuffle to speed up data movement and remove
     extra shared memory usage.
+  =============================================================================
 */
-
+/*
 //    for (int i = 0; i < 3*p_Nq3 + p_NfpNfaces; ++i; @inner(0)){
     for (int i = 0; i < 3*p_Nq3; ++i; @inner(0)){
 
@@ -1268,28 +1275,23 @@ void euler3d_flux_test(dfloat rho_i, dfloat rho_j, dfloat u_i, dfloat u_j,
             dfloat value2 = Dx2 * FxS[2] + Dy2 * FyS[2] + Dz2 * FzS[2];
             dfloat value3 = Dx2 * FxS[3] + Dy2 * FyS[3] + Dz2 * FzS[3];
             dfloat value4 = Dx2 * FxS[4] + Dy2 * FyS[4] + Dz2 * FzS[4];
-/*            
-            const int src_id = ((i%p_Nq1) + p_Nq1 - j) % p_Nq1;
-            dfloat temp0 = __shfl_sync(0xffffffff, value0, src_id, p_Nq1);
-            dfloat temp1 = __shfl_sync(0xffffffff, value1, src_id, p_Nq1);
-            dfloat temp2 = __shfl_sync(0xffffffff, value2, src_id, p_Nq1);
-            dfloat temp3 = __shfl_sync(0xffffffff, value3, src_id, p_Nq1);
-            dfloat temp4 = __shfl_sync(0xffffffff, value4, src_id, p_Nq1);
-if(e==0 && i < p_Nq1) {
-printf("thread: %d Computed: %f sent to: %d received: %f from: %d\n", i, value0, (i+j)%p_Nq1, temp0, src_id);
-}
-//            dfloat temp0 = __shfl_down_sync(0xffffffff, value0, j, 4);
-//            dfloat temp1 = __shfl_down_sync(0xffffffff, value1, j, 4);
-//            dfloat temp2 = __shfl_down_sync(0xffffffff, value2, j, 4);
-//            dfloat temp3 = __shfl_down_sync(0xffffffff, value3, j, 4);
-//            dfloat temp4 = __shfl_down_sync(0xffffffff, value4, j, 4);
+            
+//            const int src_id = ((i%p_Nq1) + p_Nq1 - j) % p_Nq1;
+//            dfloat temp0 = __shfl_sync(0xffffffff, value0, src_id, p_Nq1);
+//            dfloat temp1 = __shfl_sync(0xffffffff, value1, src_id, p_Nq1);
+//            dfloat temp2 = __shfl_sync(0xffffffff, value2, src_id, p_Nq1);
+//            dfloat temp3 = __shfl_sync(0xffffffff, value3, src_id, p_Nq1);
+//            dfloat temp4 = __shfl_sync(0xffffffff, value4, src_id, p_Nq1);
+//if(e==0 && i < p_Nq1) {
+//printf("thread: %d Computed: %f sent to: %d received: %f from: %d\n", i, value0, (i+j)%p_Nq1, temp0, src_id);
+//}
 
-            val[0] += temp0;
-            val[1] += temp1;
-            val[2] += temp2;
-            val[3] += temp3;
-            val[4] += temp4;
-*/
+//            val[0] += temp0;
+//            val[1] += temp1;
+//            val[2] += temp2;
+//            val[3] += temp3;
+//            val[4] += temp4;
+
 
 //if((temp0 == value0) && (temp1 == value1) && (temp2 == value2) && (temp3 == value3) && (temp4 == value4)) {
             atomicAdd(&(s_store_x[0][idi][jj][kk]), value0);
@@ -1497,9 +1499,9 @@ const dfloat Dz2 = Dij2 * .5f*(gzi + gzj);
             dfloat temp2 = __shfl_sync(0xffffffff, value2, src_id, p_Nq1);
             dfloat temp3 = __shfl_sync(0xffffffff, value3, src_id, p_Nq1);
             dfloat temp4 = __shfl_sync(0xffffffff, value4, src_id, p_Nq1);
-if(e==0 && i-p_Nq3 < p_Nq1) {
-printf("thread: %d Computed: %f sent to: %d received: %f from: %d\n", i, value0, (i+j)%p_Nq1, temp0, src_id);
-}
+//if(e==0 && i-p_Nq3 < p_Nq1) {
+//printf("thread: %d Computed: %f sent to: %d received: %f from: %d\n", i, value0, (i+j)%p_Nq1, temp0, src_id);
+//}
 
             val[0] += temp0;
             val[1] += temp1;
@@ -1507,25 +1509,25 @@ printf("thread: %d Computed: %f sent to: %d received: %f from: %d\n", i, value0,
             val[3] += temp3;
             val[4] += temp4;
 
-/*
-atomicAdd(&(s_store_y[0][ii][idj][kk]), Dx2 * FxS[0] + Dy2 * FyS[0] + Dz2 * FzS[0]);
-atomicAdd(&(s_store_y[1][ii][idj][kk]), Dx2 * FxS[1] + Dy2 * FyS[1] + Dz2 * FzS[1]);
-atomicAdd(&(s_store_y[2][ii][idj][kk]), Dx2 * FxS[2] + Dy2 * FyS[2] + Dz2 * FzS[2]);
-atomicAdd(&(s_store_y[3][ii][idj][kk]), Dx2 * FxS[3] + Dy2 * FyS[3] + Dz2 * FzS[3]);
-atomicAdd(&(s_store_y[4][ii][idj][kk]), Dx2 * FxS[4] + Dy2 * FyS[4] + Dz2 * FzS[4]);
-*/
+
+//atomicAdd(&(s_store_y[0][ii][idj][kk]), Dx2 * FxS[0] + Dy2 * FyS[0] + Dz2 * FzS[0]);
+//atomicAdd(&(s_store_y[1][ii][idj][kk]), Dx2 * FxS[1] + Dy2 * FyS[1] + Dz2 * FzS[1]);
+//atomicAdd(&(s_store_y[2][ii][idj][kk]), Dx2 * FxS[2] + Dy2 * FyS[2] + Dz2 * FzS[2]);
+//atomicAdd(&(s_store_y[3][ii][idj][kk]), Dx2 * FxS[3] + Dy2 * FyS[3] + Dz2 * FzS[3]);
+//atomicAdd(&(s_store_y[4][ii][idj][kk]), Dx2 * FxS[4] + Dy2 * FyS[4] + Dz2 * FzS[4]);
+
 }
 
         }
 
-/*
-@barrier("localMemFence");
-val[0] += s_store_y[0][ii][jj][kk];
-val[1] += s_store_y[1][ii][jj][kk];
-val[2] += s_store_y[2][ii][jj][kk];
-val[3] += s_store_y[3][ii][jj][kk];
-val[4] += s_store_y[4][ii][jj][kk];
-*/
+
+//@barrier("localMemFence");
+//val[0] += s_store_y[0][ii][jj][kk];
+//val[1] += s_store_y[1][ii][jj][kk];
+//val[2] += s_store_y[2][ii][jj][kk];
+//val[3] += s_store_y[3][ii][jj][kk];
+//val[4] += s_store_y[4][ii][jj][kk];
+
         // ============ accum rst = +/- 1 faces, nhat = -/+ 1
         
         // rotate coordinates
@@ -1827,11 +1829,14 @@ val[4] += s_store_z[4][ii][jj][kk];
         }
       } 
     }
-
+*/
 #else
 /* 
+  =============================================================================
     Computes dimensions in serial but uses more threads to speedup computation.
-    Will become register bound with higher orders.
+    Will become register bound with higher orders. I think it fails at order
+    5 or 6.
+  =============================================================================
 */
 //    for (int i = 0; i < p_T; ++i; @inner(0)){
     for(int i=0; i < p_Nq3*p_Nq1; ++i; @inner(0)) {
@@ -1886,7 +1891,7 @@ val[4] += s_store_z[4][ii][jj][kk];
           idf += p_NfpNfaces;
         }       
       }      
-
+// Need to set globals to 0 if using atomics
       if (i < p_Nq3){
 
         int id = i + e*p_Nq3*p_Nfields;
@@ -1905,7 +1910,7 @@ val[4] += s_store_z[4][ii][jj][kk];
         rhsf[id] = 0.0f; id += p_NfpNfaces;
         rhsf[id] = 0.0f; id += p_NfpNfaces;
       }
-
+// Scratch storage for experimenting.
       if(i < p_Nq3) {
         kk = i / p_Nq2; // z-id
         ii = (i - kk*p_Nq2) / p_Nq1; // y-id
@@ -1919,9 +1924,11 @@ val[4] += s_store_z[4][ii][jj][kk];
     }
 @barrier("localMemFence");
 /*
+  =============================================================================
     Compute all interactions for each element in parallel and reduces
-    values to single value. All elements are run in parallel. Will become
+    values to single value. All elements are also ran in parallel. Will become
     thread/register limited for higher orders
+  =============================================================================
 */
 /*
     for (int i = 0; i < p_Nq3*p_Nq1; ++i; @inner(0)) {
@@ -2057,7 +2064,9 @@ val[4] += s_store_z[4][ii][jj][kk];
 */
 
 /*
+  =============================================================================
     Original form of computation
+  =============================================================================
 */
 
     for (int i = 0; i < p_T; ++i; @inner(0)){
